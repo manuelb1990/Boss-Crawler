@@ -30,9 +30,8 @@ class PlaywrightSpider(scrapy.Spider):
             }
         )
 
-    async def parse(self, response):
+    def parse(self, response):
 
-        print("Parsing!!!")
         results = response.xpath('//div[@id="wrapper"]')
         shop_items = results.xpath('.//div[contains(@class, "product-tile-plp__info-wrapper")]')
         for shop_item in shop_items:
@@ -41,7 +40,7 @@ class PlaywrightSpider(scrapy.Spider):
                 'Price': shop_item.xpath('.//div[contains(@class, "pricing__main-price")]/text()').get().replace("\n",''),
                 'URL': response.urljoin(shop_item.xpath('.//a[contains(@class, "product-tile-plp__title-link")]/@href').get())
             }
-            yield response.follow(item['URL'], callback=self.parse_item, meta={
+            yield response.follow(item['URL'], callback=self.parse_item,errback=self.errback_close_page, meta={
                 'item': item,
                 'playwright': True,
                 'playwright_include_page':True,
@@ -52,18 +51,18 @@ class PlaywrightSpider(scrapy.Spider):
                     # PageMethod("evaluate", "window.scrollBy(0, document.body.scrollHeight)"),
                     # PageMethod("wait_for_timeout", 3000),
                     # PageMethod("evaluate", "window.scrollTo(0, 0)"),
-                    PageMethod("wait_for_selector", "div.tagg-reset.tagg-txt"),
+                    PageMethod("wait_for_selector", "div.tagg-reset.tagg-txt", timeout=180000),
                     PageMethod("wait_for_timeout", 2000),
+                    
                 ]
                 }
             )
 
 
 	    #Suche nach dem Link zur nächsten Seite
-
-        next_page_url = response.xpath('//a[contains(@class, "js-simplepagingbar-link")]/@href').getall()
+        next_page_url = response.xpath('//a[contains(@title, "Weiter")]/@href').get()
         if next_page_url:
-            next_page_url = next_page_url[1]
+            # next_page_url = next_page_url[1]
             self.logger.info(f"Nächste Seite URL gefunden: {next_page_url}")
             yield response.follow(next_page_url, callback=self.parse)
         else:
@@ -104,4 +103,8 @@ class PlaywrightSpider(scrapy.Spider):
 
         finally:
             await page.close()
+
+    async def errback_close_page(self, failure):
+        page: Page = failure.request.meta["playwright_page"]
+        await page.close()
         
