@@ -4,50 +4,104 @@ from playwright.async_api import Page
 
 
 class PlaywrightSpider(scrapy.Spider):
-    name = 'Playwright'
+    name = 'Playwright2'
     allowed_domains = ['hugoboss.com']
-    start_urls = ['https://www.hugoboss.com/de/regular-fit-hose-aus-knitterfreiem-japanischem-krepp-mit-tunnelzug/hbeu50427841_466.html?cgid=11000']
+    start_urls = ['https://www.hugoboss.com/de/damen-kleidung/?srule=sort_by_most_popular&start=0&sz=36']
 
-
-        # Speichert immer in JSON Datei
+            # Speichert immer in JSON Datei
     custom_settings = {
         'FEEDS': {
             'BOSStest.json': {'format': 'json', 'overwrite': True},
         }
     }
 
+
     def start_requests(self):
         yield scrapy.Request(
-            url='https://www.hugoboss.com/de/regular-fit-hose-aus-knitterfreiem-japanischem-krepp-mit-tunnelzug/hbeu50427841_466.html?cgid=11000',
+            url='https://www.hugoboss.com/de/damen-kleidung/?srule=sort_by_most_popular&start=0&sz=36',
             meta={
                 'playwright': True,
                 'playwright_include_page':True,
                 'playwright_page_methods': [
                 PageMethod("wait_for_selector","button.sc-dcJsrY.jvRBls"),
-                #PageMethod("wait_for_timeout", 3000),
                 PageMethod("click", "button.sc-dcJsrY.jvRBls"),
-                PageMethod("wait_for_navigation"),
-                PageMethod("evaluate", "window.scrollBy(0, document.body.scrollHeight)"),
-                PageMethod("wait_for_timeout", 3000),
-                PageMethod("evaluate", "window.scrollTo(0, 0)"),
-                PageMethod("wait_for_selector", "div.tagg-reset.tagg-txt"),
-                PageMethod("wait_for_timeout", 2000),
+                # PageMethod("wait_for_timeout", 10000),
                 ]
             }
         )
-    def parse(self, response):
-        self.logger.info(f"Parsing item from URL: {response.url}")
-        print (response.text)
-        products = response.css('div.pdp-main')
-        
-        for product in products:
-            name = product.css('h1.pdp-stage__header-title::text').get()
-            price = product.css('div.pricing__main-price::text').get()
-            info = product.css('div.tagg-reset.tagg-txt::text').getall()
 
-            yield {
-                'name': name,
-                'price': price,
-                'info': info,
+    async def parse(self, response):
+
+        print("Parsing!!!")
+        results = response.xpath('//div[@id="wrapper"]')
+        shop_items = results.xpath('.//div[contains(@class, "product-tile-plp__info-wrapper")]')
+        for shop_item in shop_items:
+            item = {
+                'Title': shop_item.xpath('.//a[contains(@class, "product-tile-plp__title-link")]/@title').get(),
+                'Price': shop_item.xpath('.//div[contains(@class, "pricing__main-price")]/text()').get().replace("\n",''),
+                'URL': response.urljoin(shop_item.xpath('.//a[contains(@class, "product-tile-plp__title-link")]/@href').get())
             }
-        # await Page.close()
+            yield response.follow(item['URL'], callback=self.parse_item, meta={
+                'item': item,
+                'playwright': True,
+                'playwright_include_page':True,
+                'playwright_page_methods': [
+                    # PageMethod("wait_for_selector", "button.sc-dcJsrY.jvRBls"),
+                    # PageMethod("wait_for_timeout", 1000),
+                    # PageMethod("click", "button.sc-dcJsrY.jvRBls"),
+                    # PageMethod("evaluate", "window.scrollBy(0, document.body.scrollHeight)"),
+                    # PageMethod("wait_for_timeout", 3000),
+                    # PageMethod("evaluate", "window.scrollTo(0, 0)"),
+                    PageMethod("wait_for_selector", "div.tagg-reset.tagg-txt"),
+                    PageMethod("wait_for_timeout", 2000),
+                ]
+                }
+            )
+
+
+	    #Suche nach dem Link zur nächsten Seite
+
+        next_page_url = response.xpath('//a[contains(@class, "js-simplepagingbar-link")]/@href').getall()
+        if next_page_url:
+            next_page_url = next_page_url[1]
+            self.logger.info(f"Nächste Seite URL gefunden: {next_page_url}")
+            yield response.follow(next_page_url, callback=self.parse)
+        else:
+            self.logger.info("Keine nächste Seite URL gefunden.")
+
+
+    async def parse_item(self, response):
+        page = response.meta['playwright_page']
+        try:
+            item = response.meta['item']
+            temp={}
+            FIT_Filter = response.css('div.pdp-stage__header-flag::text').getall()
+
+            if len(FIT_Filter) == 1:
+                if 'SALE' in FIT_Filter[0]:
+                    print("ACHTUNG")
+                    temp = "Kein spezieller Fit(manuell)"
+                else:
+                    temp = FIT_Filter[0]
+            elif len(FIT_Filter) >= 2:
+                temp = FIT_Filter[1]
+            else:
+                temp= 'Fit nicht vorhanden!'
+                print("Fit von ITEM Fehlt!")
+
+            item['Fit'] = temp.replace("\n",'')
+            item ['Color'] = response.xpath('//*[@id="pdp-stage-color-selector"]/div[1]/div[1]/nav/a[1]/span/strong/u/text()').get()
+            item['Description'] = response.xpath('//div[contains(@class, "pdp-stage__accordion-description")]/text()').get().replace("\n",'')
+            item['Material'] = response.xpath('//div[@id="product-container-care-panel"]/text()').get().replace("\n",'')
+            item['info'] = response.css('div.tagg-reset.tagg-txt::text').getall()
+
+            yield item
+
+        
+        except Exception as e:
+            self.logger.error(f"Ein Fehler trat auf beim Verarbeiten der Seite {response.url}: {str(e)}")
+            await page.close()  # Schließt die Seite, wenn ein Fehler auftritt
+
+        finally:
+            await page.close()
+        
